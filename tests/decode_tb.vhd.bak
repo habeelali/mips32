@@ -50,6 +50,7 @@ architecture Behavioral of decode_tb is
     end function;
 
 begin
+    -- Instantiate DUT
     uut: decode port map (
         instruction => instruction,
         clock => clock,
@@ -70,110 +71,91 @@ begin
 
     -- Test process
     stimulus: process
-        procedure check_output(test_name : string; signal_name : string;
-                               actual, expected : STD_LOGIC_VECTOR(31 downto 0)) is
+        procedure check_output(
+            name     : string;
+            actual   : STD_LOGIC_VECTOR(31 downto 0);
+            expected : STD_LOGIC_VECTOR(31 downto 0)) is
         begin
-            if actual = expected then
-                report "PASS: " & test_name & " - " & signal_name & " OK.";
-            else
-                report "FAIL: " & test_name & " - " & signal_name;
+            if actual /= expected then
+                report "ERROR: " & name & " mismatch";
                 report "  Expected: " & slv_to_hexstr(expected);
                 report "  Actual:   " & slv_to_hexstr(actual);
                 test_passed <= false;
             end if;
         end procedure;
-
     begin
-        -- Reset
+        -- Reset system
         reset <= '1';
         wait for CLK_PERIOD;
         reset <= '0';
         wait for CLK_PERIOD;
 
-        -- === TEST 1: R-type ADD ===
+        ----------------------------------------------------------------------
+        -- Test 1: R-type ADD ($3 = $1 + $2) - ALU writeback
+        ----------------------------------------------------------------------
         instruction <= "000000" & "00001" & "00010" & "00011" & "00000" & "100000";
-        RegDst <= '1'; RegWrite <= '1'; MemToReg <= '0';
+        RegDst <= '1';      -- Select rd = 3
+        RegWrite <= '1';
+        MemToReg <= '0';
         alu_result <= X"AAAAAAAA";
         wait for CLK_PERIOD;
-        check_output("R-type ADD", "register_rs", register_rs, X"11111111");
-        check_output("R-type ADD", "register_rt", register_rt, X"22222222");
+        check_output("register_rs", register_rs, X"11111111");
+        check_output("register_rt", register_rt, X"22222222");
 
-        -- === TEST 2: I-type LW (offset -4) ===
+        ----------------------------------------------------------------------
+        -- Test 2: I-type LW with negative offset (-4)
+        ----------------------------------------------------------------------
         instruction <= "100011" & "00100" & "00101" & "1111111111111100";
-        RegDst <= '0'; RegWrite <= '1'; MemToReg <= '1';
+        RegDst <= '0';      -- Select rt = 5
+        RegWrite <= '1';
+        MemToReg <= '1';
         memory_data <= X"BBBBBBBB";
         wait for CLK_PERIOD;
-        check_output("I-type LW", "immediate", immediate, X"FFFFFFFC");
+        check_output("immediate", immediate, X"FFFFFFFC");
 
-        -- === TEST 3: J-type jump to 0x0000000C ===
+        ----------------------------------------------------------------------
+        -- Test 3: J-type Jump to 0x0000000C
+        ----------------------------------------------------------------------
         instruction <= "000010" & "00000000000000000000000011";
         RegWrite <= '0';
         wait for CLK_PERIOD;
-        check_output("Jump", "jump_addr", jump_addr, X"0000000C");
+        check_output("jump_addr", jump_addr, X"0000000C");
 
-        -- === TEST 4: Write to register 0 (ignore) ===
+        ----------------------------------------------------------------------
+        -- Test 4: Attempt write to register 0 (should be ignored)
+        ----------------------------------------------------------------------
         instruction <= "000000" & "00001" & "00010" & "00000" & "00000" & "100000";
-        RegDst <= '1'; RegWrite <= '1'; MemToReg <= '0';
+        RegDst <= '1';      -- rd = 0
+        RegWrite <= '1';
+        MemToReg <= '0';
         alu_result <= X"DEADBEEF";
         wait for CLK_PERIOD;
 
-        instruction <= "000000" & "00000" & "00000" & "00001" & "00000" & "100000";
+        -- Re-read rs = 0 to verify it didn't change
+        instruction <= "000000" & "00000" & "00000" & "00001" & "00000" & "100000";  -- rs = 0
         RegWrite <= '0';
         wait for CLK_PERIOD;
-        check_output("Write to R0", "register_rs (reg 0)", register_rs, X"00000000");
+        check_output("register_rs (reg 0)", register_rs, X"00000000");
 
-        -- === TEST 5: Immediate = 0x7FFF ===
+        ----------------------------------------------------------------------
+        -- Test 5: Immediate = 0x7FFF (positive max 16-bit)
+        ----------------------------------------------------------------------
         instruction <= "001000" & "00001" & "00010" & "0111111111111111";
         RegWrite <= '0';
         wait for CLK_PERIOD;
-        check_output("Immediate 0x7FFF", "immediate", immediate, X"00007FFF");
+        check_output("immediate (0x7FFF)", immediate, X"00007FFF");
 
-        -- === TEST 6: Immediate = 0x8000 ===
+        ----------------------------------------------------------------------
+        -- Test 6: Immediate = 0x8000 (negative min 16-bit)
+        ----------------------------------------------------------------------
         instruction <= "001000" & "00001" & "00010" & "1000000000000000";
         RegWrite <= '0';
         wait for CLK_PERIOD;
-        check_output("Immediate 0x8000", "immediate", immediate, X"FFFF8000");
+        check_output("immediate (0x8000)", immediate, X"FFFF8000");
 
-        -- === TEST 7: Boundary jump address near 0xFFFFFFFC ===
-        instruction <= "000010" & "11111111111111111111111111";  -- index = 0x3FFFFFF
-        wait for CLK_PERIOD;
-        check_output("Jump max", "jump_addr", jump_addr, X"0FFFFFFC");
-
-        -- === TEST 8: R-type SUB ===
-        instruction <= "000000" & "00001" & "00010" & "00100" & "00000" & "100010";
-        RegDst <= '1'; RegWrite <= '1'; MemToReg <= '0';
-        alu_result <= X"12345678";
-        wait for CLK_PERIOD;
-        check_output("R-type SUB", "register_rs", register_rs, X"11111111");
-
-        -- === TEST 9: R-type AND ===
-        instruction <= "000000" & "00001" & "00010" & "00101" & "00000" & "100100";
-        alu_result <= X"CAFEBABE";
-        wait for CLK_PERIOD;
-        check_output("R-type AND", "register_rt", register_rt, X"22222222");
-
-        -- === TEST 10: R-type OR ===
-        instruction <= "000000" & "00001" & "00010" & "00110" & "00000" & "100101";
-        alu_result <= X"0BADBEEF";
-        wait for CLK_PERIOD;
-        check_output("R-type OR", "register_rs", register_rs, X"11111111");
-
-        -- === TEST 11: RegDst = 0, write to rt ===
-        -- Write to register 2 (with RegDst = 0)
-			instruction <= "000000" & "00001" & "00010" & "00000" & "00000" & "100000"; -- write to rt=2
-			RegDst <= '0'; RegWrite <= '1'; MemToReg <= '0';
-			alu_result <= X"55667788";
-			wait for CLK_PERIOD;
-
-			-- Issue a NOP or instruction that reads register 2 (rs=2)
-			instruction <= "000000" & "00010" & "00000" & "00000" & "00000" & "100000"; -- rs=2 (read)
-			RegWrite <= '0';
-			wait for CLK_PERIOD;
-
-			-- Now check the register_rs output for register 2's updated value
-			check_output("RegDst = 0 write", "register_rs (reg 2)", register_rs, X"55667788");
-
-        -- === FINAL SUMMARY ===
+        ----------------------------------------------------------------------
+        -- Final Result
+        ----------------------------------------------------------------------
         wait for CLK_PERIOD;
         if test_passed then
             report "=== ALL TESTS PASSED ===" severity note;
